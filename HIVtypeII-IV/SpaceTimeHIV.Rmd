@@ -1,0 +1,893 @@
+---
+title: 'Spatiotemporal analysis of cervical cancer incidence among HIV positive women in South Africa: Type II-IV interactions'
+author: "Garyfallos Konstantinoudis"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+bibliography: biblio.bib
+---
+
+
+<style type="text/css">
+body{ /* Normal  */
+      font-size: 14px;
+  }
+h1.title {
+  font-size: 30px;
+  color: black;
+  font-weight: bold;
+}
+h1 { /* Header 1 */
+    font-size: 25px;
+  color: black;
+  font-weight: bold;
+}
+h2 { /* Header 2 */
+    font-size: 20px;
+  color: black;
+  font-weight: bold;
+}
+h3 { /* Header 3 */
+    font-size: 15px;
+  color: black;
+  font-weight: bold;
+}
+code.r{ /* Code block */
+    font-size: 14px;
+}
+pre, code {
+    color: 	#1B0F0E;
+  }
+</style>
+
+
+\pagenumbering{gobble} 
+\pagenumbering{arabic} 
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE, fig.align = "center",
+                      fig.width=7, fig.height=4)
+```
+
+
+In this practical you will use `R` [@R-base] as well as `nimble` [@nimble] to carry out a spatial and a spatio-temporal small area disease risk analysis.
+
+In particular, you are going to model yearly cervical cancer (C53.0, C53.1, C53.8 and C53.9) incidence among women diagnosed with HIV in South Africa during 2004-2014. This dataset was previously explored in the tutorial entitled "Spatiotemporal analysis of Cervical cancer among HIV positive women in South Africa: type I spatiotemporal interaction".
+
+The code used for this tutorial is an adaptation of the code provided in Chapter 15 in [@haining2020].
+
+## Before starting the practical
+
+* Load needed libraries:
+```{r echo=TRUE, eval = TRUE, message=FALSE}
+library(dplyr)        # A package for data manipulation
+library(sf)           # Simple feature for R
+library(spdep)        # Functions and tests for evaluating spatial patterns 
+                      # and autocorrelation
+library(tidyr)
+
+library(nimble)       # A package for running nimble from R
+library(ggmcmc)       # A package for plotting and viewing of MCMC output
+library(coda)         # A package for summarizing and plotting of MCMC output 
+                      # and diagnostic tests
+
+library(ggplot2)      # A package that implements the grammar of graphics, which is a term used to
+                      # break up graphs into semantic components, such as geometries and layers.
+library(viridis)      # A package providing color palettes 
+library(patchwork)
+
+# For tables in RMarkdown
+library(knitr)
+library(kableExtra)
+```
+
+* To install the entire suite of packages, we can use:
+```{r eval = FALSE,  results="hide"}
+
+install.packages(c("sf", "dplyr", "tidyr", "nimble", "coda", "spdep", "patchwork", "ggplot2","GGally", "ggmcmc", "viridis", "patchwork", "knitr", "kableExtra"),
+                 dependencies = TRUE, repos = "http://cran.r-project.org")
+
+```
+
+## Data
+
+1. Import the`.rds` file with the data and call the data.frame object as *CC_HIV*. Import also the `.shp` and call it `RSA_shp`.
+
+```{r eval=TRUE, echo=TRUE, message=FALSE}
+CC_HIV <- readRDS("CC_HIV")
+head(CC_HIV)
+
+RSA_shp <- read_sf("ShapeSA_mun.shp")
+```
+Here The first column labeled `year` is the year of the diagnosis, `ID` is a municipality ID, `CCcases` is the number of cervical cancer cases and `HIV_cases_expected` is the number of expected number of cases (women) diagnosed with HIV.
+
+## Space time interaction type II
+
+7. Write a model in `nimble` were you include spatially and temporally structured and unstructured components.
+
+```{r}
+
+st_typeII_BYMmodel <- nimbleCode(
+{
+  for (i in 1:N) 
+    {
+    for(t in 1:Temporal)
+      {
+          
+      O[i,t]  ~ dpois(mu[i,t])
+      log(mu[i,t]) <- log(E[i,t]) + alpha + theta[i] + phi[i] + gamma[t] + xi[t] + zeta[i, t]
+      
+      gamma[t] ~ dnorm(0,tau.gamma) 
+    }
+    
+      zeta[i, 1:Temporal] ~ dcar_normal(adj.tm[1:K], weights.tm[1:K], 
+                                        num.tm[1:Temporal], tau.zeta, zero_mean = 1)
+      theta[i] ~ dnorm(0,tau.theta)                 
+    }
+  
+
+# intrinsic CAR prior on temporal random effects
+  xi[1:Temporal] ~ dcar_normal(adj.tm[1:K], weights.tm[1:K], 
+                               num.tm[1:Temporal], tau.xi, zero_mean = 1)
+  
+# intrinsic CAR prior on spatial random effects
+  phi[1:N] ~ dcar_normal(adj[1:L], weights[1:L], num[1:N], tau.phi, zero_mean = 1)
+  
+
+# priors
+  alpha  ~ dflat()                    
+  overallRR <- exp(alpha)             
+    
+  # temporal field
+  tau.gamma~ dgamma(1,0.001)          
+  sigma2.gamma <- 1/tau.gamma         
+  
+  tau.xi ~ dgamma(0.5,0.005)          
+  sigma2.xi <- 1/tau.xi               
+  
+  # spatial field
+  tau.theta ~ dgamma(1,0.001)         
+  sigma2.theta <- 1/tau.theta         
+  
+  tau.phi ~ dgamma(0.5,0.005)         
+  sigma2.phi <- 1/tau.phi             
+  
+  # spatiotemporal field
+  tau.zeta ~ dgamma(1,0.001)          
+  sigma2.zeta <- 1/tau.zeta      
+
+}
+)
+
+```
+
+8. Define the spatial weight matrix
+
+```{r}
+
+RSA_nb <- poly2nb(RSA_shp)
+nbWB <- nb2WB(nb = RSA_nb)
+
+```
+
+9. Define the temporal weight matrix
+
+```{r eval=TRUE, echo=TRUE, include=TRUE}
+
+# For the random walk 1 we can do something similar
+Temporal <- length(unique(CC_HIV$year))
+W <- matrix(0, nrow = Temporal, ncol = Temporal)
+
+for(i in 1:(Temporal-1)) W[i,i+1] <- 1
+for(i in 1:(Temporal-1)) W[i+1,i] <- 1
+
+Wnb_temporal <- mat2listw(W)
+Wnb_temporal <- nb2WB(nb = Wnb_temporal$neighbours)
+
+```
+
+10. Create matrices of the observed and expected number of cervical cancers where each column is a different year and each row a different municipality. 
+
+```{r}
+
+# prepare observed data
+Observed <- spread(CC_HIV[,c("year", "ID", "CCcases")], year, CCcases)
+Observed <- as.matrix(Observed[,-1])
+
+# prepare expected data
+Expected <- spread(CC_HIV[,c("year", "ID", "HIV_expected")], year, HIV_expected)
+Expected <- as.matrix(Expected[,-1])
+
+```
+
+11. Set the data and the constants.
+
+```{r eval=TRUE, echo=TRUE, include=TRUE}
+
+N <- nrow(Observed)
+
+CCdata = list(
+                 O = Observed                           
+)      
+      
+CCConsts <-list(      
+                 N = N,                                  
+                 # space
+                 L = length(nbWB$weights),               
+                 E = Expected,                           
+                 adj = nbWB$adj,                         
+                 num = nbWB$num, 
+                 weights = nbWB$weights, 
+                 # time
+                 Temporal = Temporal, 
+                 K = length(Wnb_temporal$weights), 
+                 adj.tm = Wnb_temporal$adj, 
+                 num.tm = Wnb_temporal$num, 
+                 weights.tm = Wnb_temporal$weights
+)
+
+```
+
+12. Define the initial values.
+
+```{r eval=TRUE, echo=TRUE}
+
+inits <- list(
+  list(alpha = 1,
+       tau.theta = 10,
+       tau.phi = 1,
+       tau.xi = 8, 
+       tau.gamma = 5,
+       tau.zeta = 5,
+       theta = rep(0.02, times = N), 
+       phi = c(rep(0.2, times = N)), 
+       gamma = rep(0.02, times = Temporal),
+       xi = c(rep(0.2, times = Temporal)), 
+       zeta = matrix(0.2, nrow = N, ncol = Temporal)
+       ),
+  list(alpha = 0.5,
+       tau.theta = 1,
+       tau.phi = 0.1,
+       tau.xi = 0.8, 
+       tau.gamma = 0.5,
+       tau.zeta = 1, 
+       theta = rep(0.05, times = N),
+       phi = c(rep(-0.05, times = N)), 
+       gamma = rep(-0.02, times = Temporal),
+       xi = c(rep(-0.2, times = Temporal)), 
+       zeta = matrix(-0.2, nrow = N, ncol = Temporal)
+       )
+)
+
+```
+
+13. Define the monitors. Monitor the overall relative risk, all the variance hyperparameters and all the random effects.
+
+```{r eval=TRUE, echo=TRUE}
+params <- c("overallRR", "sigma2.phi",
+            "sigma2.theta", "phi", "theta", "xi", "gamma",
+            "sigma2.gamma", "sigma2.xi", "mu",
+            "sigma2.zeta", "zeta", "alpha")
+```
+
+14. Specify the MCMC setting
+
+```{r eval=TRUE, echo=TRUE, include=TRUE}
+# MCMC setting
+ni <- 50000  # nb iterations 
+nt <- 5      # thinning interval
+nb <- 10000  # nb iterations as burn-in 
+nc <- 2      # nb chains
+```
+
+15. Call the `nimleMCMC()` function. (Takes 15 minutes)
+
+```{r eval=FALSE, echo=TRUE}
+
+t_0 <- Sys.time()
+st_typeII_BYM.model <- nimbleMCMC(code = st_typeII_BYMmodel,
+                      data = CCdata,
+                      constants = CCConsts, 
+                      inits = inits,
+                      monitors = params,
+                      niter = ni,
+                      nburnin = nb,
+                      thin = nt, 
+                      nchains = nc, 
+                      setSeed = 9, 
+                      progressBar = TRUE, 
+                      samplesAsCodaMCMC = TRUE, 
+                      summary = TRUE, 
+                      WAIC = TRUE
+                      )
+t_1 <- Sys.time()
+t_1 - t_0
+
+```
+
+```{r eval=TRUE, echo=FALSE, include=FALSE}
+
+# saveRDS(st_typeII_BYM.model, file = "st_typeII_BYM.model")
+st_typeII_BYM.model <- readRDS("st_typeII_BYM.model")
+
+```
+
+
+### Convergence diagnostics
+
+
+16. Plot the traceplots for the intercept and the four variances
+
+```{r eval=TRUE, echo=TRUE, fig.height = 12, fig.width=10}
+
+ggs_stBYM.model <- ggs(st_typeII_BYM.model$samples)
+
+
+ggs_stBYM.model %>% filter(Parameter %in% c("overallRR", "sigma2.theta","sigma2.phi",
+                                            "sigma2.gamma", "sigma2.xi", "sigma2.zeta")) %>% 
+  ggs_traceplot() + theme_bw()
+
+```
+
+17. Calculate the Gelman and Rubin diagnostic and check the convergence of the random effects. 
+
+```{r eval=FALSE, echo=TRUE}
+
+GR.diag <- gelman.diag(st_typeII_BYM.model$samples, multivariate = FALSE)
+
+all(GR.diag$psrf[startsWith(rownames(GR.diag$psrf), c("gamma")),"Point est."] < 1.1)
+all(GR.diag$psrf[startsWith(rownames(GR.diag$psrf), c("theta")),"Point est."] <1.1)
+all(GR.diag$psrf[startsWith(rownames(GR.diag$psrf), c("phi")),"Point est."] < 1.1)
+all(GR.diag$psrf[startsWith(rownames(GR.diag$psrf), c("xi")),"Point est."] <1.1)
+all(GR.diag$psrf[startsWith(rownames(GR.diag$psrf), c("zeta")),"Point est."]<1.1)
+
+```
+
+
+
+## Space time interaction type III
+
+18. Write the model for spacetime interaction type III
+
+```{r}
+
+st_typeIII_BYMmodel <- nimbleCode(
+{
+  for (i in 1:N) 
+    {
+    for(t in 1:Temporal)
+    {
+      O[i,t]  ~ dpois(mu[i,t])
+      log(mu[i,t]) <- log(E[i,t]) + alpha + theta[i] + phi[i] + gamma[t] + xi[t] + zeta[i, t]
+      
+      zeta[i, t] <- zeta.transposed[t, i]
+      zeta.transposed[t, 1:N] ~ dcar_normal(adj[1:L], weights[1:L], 
+                                           num[1:N], tau.zeta, zero_mean = 1)
+      
+      gamma[t] ~ dnorm(0,tau.gamma) 
+    }
+    
+      theta[i] ~ dnorm(0,tau.theta)                 
+    }
+  
+
+# intrinsic CAR prior on temporal random effects
+  xi[1:Temporal] ~ dcar_normal(adj.tm[1:K], weights.tm[1:K], 
+                               num.tm[1:Temporal], tau.xi, zero_mean = 1)
+  
+# intrinsic CAR prior on spatial random effects
+  phi[1:N] ~ dcar_normal(adj[1:L], weights[1:L], num[1:N], tau.phi, zero_mean = 1)
+  
+
+# priors
+  alpha  ~ dflat()                    
+  overallRR <- exp(alpha)             
+    
+  # temporal field
+  tau.gamma~ dgamma(1,0.001)          
+  sigma2.gamma <- 1/tau.gamma         
+  
+  tau.xi ~ dgamma(0.5,0.005)          
+  sigma2.xi <- 1/tau.xi               
+  
+  # spatial field
+  tau.theta ~ dgamma(1,0.001)         
+  sigma2.theta <- 1/tau.theta         
+  
+  tau.phi ~ dgamma(0.5,0.005)         
+  sigma2.phi <- 1/tau.phi             
+  
+  # spatiotemporal field
+  tau.zeta ~ dgamma(1,0.001)          
+  sigma2.zeta <- 1/tau.zeta      
+
+}
+)
+
+```
+
+
+19. Redefine the initials ones to consider the `zeta.transpose`
+
+```{r eval=TRUE, echo=TRUE}
+
+inits <- list(
+  list(alpha = 1,
+       tau.theta = 10,
+       tau.phi = 1,
+       tau.xi = 8, 
+       tau.gamma = 5,
+       tau.zeta = 5,
+       theta = rep(0.02, times = N), 
+       phi = c(rep(0.2, times = N)), 
+       gamma = rep(0.02, times = Temporal),
+       xi = c(rep(0.2, times = Temporal)), 
+       zeta.transposed = t(matrix(0.2, nrow = N, ncol = Temporal))
+       ),
+  list(alpha = 0.5,
+       tau.theta = 1,
+       tau.phi = 0.1,
+       tau.xi = 0.8, 
+       tau.gamma = 0.5,
+       tau.zeta = 1, 
+       theta = rep(0.05, times = N),
+       phi = c(rep(-0.05, times = N)), 
+       gamma = rep(-0.02, times = Temporal),
+       xi = c(rep(-0.2, times = Temporal)), 
+       zeta.transposed = t(matrix(-0.2, nrow = N, ncol = Temporal))
+       )
+)
+
+```
+
+
+20. Call the `nimble` function (18 minutes):
+
+```{r eval=FALSE, echo=TRUE}
+
+t_0 <- Sys.time()
+st_typeIII_BYM.model <- nimbleMCMC(code = st_typeIII_BYMmodel,
+                      data = CCdata,
+                      constants = CCConsts, 
+                      inits = inits,
+                      monitors = params,
+                      niter = ni,
+                      nburnin = nb,
+                      thin = nt, 
+                      nchains = nc, 
+                      setSeed = 9, 
+                      progressBar = TRUE, 
+                      samplesAsCodaMCMC = TRUE, 
+                      summary = TRUE, 
+                      WAIC = TRUE
+                      )
+t_1 <- Sys.time()
+t_1 - t_0
+
+```
+
+```{r eval=TRUE, echo=FALSE, include=FALSE}
+
+# saveRDS(st_typeIII_BYM.model, file = "st_typeIII_BYM.model")
+st_typeIII_BYM.model <- readRDS("st_typeIII_BYM.model")
+
+```
+
+### Convergence diagnostics
+
+21. Plot the traceplots for the intercept and the four variances
+
+```{r eval=TRUE, echo=TRUE, fig.height = 12, fig.width=10}
+
+ggs_stBYM.model <- ggs(st_typeIII_BYM.model$samples)
+
+
+ggs_stBYM.model %>% filter(Parameter %in% c("overallRR", "sigma2.theta","sigma2.phi",
+                                            "sigma2.gamma", "sigma2.xi", "sigma2.zeta")) %>% 
+  ggs_traceplot() + theme_bw()
+
+```
+
+
+21. Calculate the Gelman and Rubin diagnostic and check the convergence of the random effects. 
+
+```{r eval=FALSE, echo=TRUE}
+
+GR.diag <- gelman.diag(st_typeIII_BYM.model$samples, multivariate = FALSE)
+
+all(GR.diag$psrf[startsWith(rownames(GR.diag$psrf), c("gamma")),"Point est."] < 1.1)
+all(GR.diag$psrf[startsWith(rownames(GR.diag$psrf), c("theta")),"Point est."] <1.1)
+all(GR.diag$psrf[startsWith(rownames(GR.diag$psrf), c("phi")),"Point est."] < 1.1)
+all(GR.diag$psrf[startsWith(rownames(GR.diag$psrf), c("xi")),"Point est."] <1.1)
+all(GR.diag$psrf[startsWith(rownames(GR.diag$psrf), c("zeta")),"Point est."]<1.1)
+
+```
+
+## Space time interaction type IV
+
+22. Write the model for spacetime interaction type IV
+
+```{r}
+
+st_typeIV_BYMmodel <- nimbleCode(
+{
+  for (i in 1:N) 
+    {
+    for(t in 1:Temporal)
+    {
+      O[i,t]  ~ dpois(mu[i,t])
+      log(mu[i,t]) <- log(E[i,t]) + alpha + theta[i] + phi[i] + 
+        gamma[t] + xi[t] + zeta.centred[i, t]
+      
+      gamma[t] ~ dnorm(0,tau.gamma) 
+      
+      d[i,t] <- zeta[zetaID[i, t]]
+      zeta.centred[i, t] <- d[i, t] - row.mean[i] - col.mean[t]
+      zetaID[i, t] <- t + (i - 1)*Temporal
+    }
+    
+      theta[i] ~ dnorm(0,tau.theta)                 
+    }
+  
+  
+  for (i in 1:N) {
+    row.mean[i] <- sum(d[i, 1:Temporal])/Temporal
+  }
+  for (t in 1:Temporal) {
+    col.mean[t] <- sum(d[1:N, t])/N
+  }
+
+  
+# intrinsic CAR prior on temporal random effects
+  xi[1:Temporal] ~ dcar_normal(adj.tm[1:K], weights.tm[1:K], 
+                               num.tm[1:Temporal], tau.xi, zero_mean = 1)
+  
+# intrinsic CAR prior on spatial random effects
+  phi[1:N] ~ dcar_normal(adj[1:L], weights[1:L], 
+                         num[1:N], tau.phi, zero_mean = 1)
+  
+# Type IV spacetime interaction
+  zeta[1:NT] ~ dcar_normal(adj.st[1:M], weights.st[1:M], 
+                          num.st[1:NT], tau.zeta)
+
+# priors
+  alpha  ~ dflat()                    
+  overallRR <- exp(alpha)             
+    
+  # temporal field
+  tau.gamma~ dgamma(1,0.001)          
+  sigma2.gamma <- 1/tau.gamma         
+  
+  tau.xi ~ dgamma(0.5,0.005)          
+  sigma2.xi <- 1/tau.xi               
+  
+  # spatial field
+  tau.theta ~ dgamma(1,0.001)         
+  sigma2.theta <- 1/tau.theta         
+  
+  tau.phi ~ dgamma(0.5,0.005)         
+  sigma2.phi <- 1/tau.phi             
+  
+  # spatiotemporal field
+  tau.zeta ~ dgamma(1,0.001)          
+  sigma2.zeta <- 1/tau.zeta      
+}
+)
+
+```
+
+
+23. Define the weights based on the Kronecker product. This code is available [here](https://www.sptmbook.com/datacode.html).
+
+```{r}
+
+contruct_typeIV_weights <- function(spW,ntimes) {
+  ####    this function constructs the weights for the space-time interaction of Type IV
+  ####    On input:
+  ####       - spW is an NxN spatial weights matrix with diagonals=0
+  ####       - ntimes denotes the number of time points in the time series
+  Dsp <- apply(spW,1,sum)
+  Qsp <- diag(Dsp) - spW
+  Dtm <- c(1,rep(2,ntimes-2),1)
+  Qtm <- diag(Dtm)
+  for (tt in 1:ntimes) {
+    if (tt==1) Qtm[tt,2] <- -1
+    if (tt==ntimes) Qtm[tt,tt-1] <- -1
+    if (tt>1 & tt<ntimes) Qtm[tt,c(tt-1,tt+1)] <- -1
+  }
+  QtypeIV <- kronecker(Qsp,Qtm)
+  DtypeIV <- diag(diag(QtypeIV))
+  WtypeIV <- DtypeIV - QtypeIV
+  adj <- list(num=NULL,weights=NULL,adj=NULL)
+  n <- nrow(WtypeIV)
+  for (i in 1:n) {
+    ids <- which(WtypeIV[i,]!=0)
+    adj$num <- c(adj$num,length(ids))
+    adj$adj <- c(adj$adj,ids)
+    adj$weights <- c(adj$weights,WtypeIV[i,ids])
+  }
+  return(adj)
+}
+
+
+spW <- nb2mat(RSA_nb, style='B')
+kronecker_weights <- contruct_typeIV_weights(spW = spW, ntimes = Temporal)
+
+```
+
+24. Add the Kronecker product in the constants
+
+```{r}
+
+CCConsts <-list(      
+                 N = N,                                  
+                 # space
+                 L = length(nbWB$weights),               
+                 E = Expected,                           
+                 adj = nbWB$adj,                         
+                 num = nbWB$num, 
+                 weights = nbWB$weights, 
+                 # time
+                 Temporal = Temporal, 
+                 K = length(Wnb_temporal$weights), 
+                 adj.tm = Wnb_temporal$adj, 
+                 num.tm = Wnb_temporal$num, 
+                 weights.tm = Wnb_temporal$weights,
+                 # Kronecker
+                 NT = N*Temporal,
+                 M = length(kronecker_weights$weights),
+                 adj.st = kronecker_weights$adj, 
+                 num.st = kronecker_weights$num, 
+                 weights.st = kronecker_weights$weights
+                 
+)
+
+```
+
+
+25. Redefine the initials and monitors
+
+```{r eval=TRUE, echo=TRUE}
+
+inits <- list(
+  list(alpha = 1,
+       tau.theta = 10,
+       tau.phi = 1,
+       tau.xi = 8, 
+       tau.gamma = 5,
+       tau.zeta = 5,
+       theta = rep(0.02, times = N), 
+       phi = c(rep(0.2, times = N)), 
+       gamma = rep(0.02, times = Temporal),
+       xi = c(rep(0.2, times = Temporal)), 
+       zeta = rep(0.2, times = N*Temporal)
+       ),
+  list(alpha = 0.5,
+       tau.theta = 1,
+       tau.phi = 0.1,
+       tau.xi = 0.8, 
+       tau.gamma = 0.5,
+       tau.zeta = 1, 
+       theta = rep(0.05, times = N),
+       phi = c(rep(-0.05, times = N)), 
+       gamma = rep(-0.02, times = Temporal),
+       xi = c(rep(-0.2, times = Temporal)), 
+       zeta = rep(-0.2, times = N*Temporal)
+       )
+)
+
+```
+
+```{r eval=TRUE, echo=TRUE}
+params <- c("overallRR", "sigma2.phi",
+            "sigma2.theta", "phi", "theta", "xi", "gamma",
+            "sigma2.gamma", "sigma2.xi", "mu",
+            "sigma2.zeta", "zeta", "alpha", "zeta.centred")
+```
+
+26. Call the `nimbleMCMC` function. (1.6 days)
+
+```{r eval=FALSE, echo=TRUE}
+
+t_0 <- Sys.time()
+st_typeIV_BYM.model <- nimbleMCMC(code = st_typeIV_BYMmodel,
+                      data = CCdata,
+                      constants = CCConsts, 
+                      inits = inits,
+                      monitors = params,
+                      niter = ni,
+                      nburnin = nb,
+                      thin = nt, 
+                      nchains = nc, 
+                      setSeed = 9, 
+                      progressBar = TRUE, 
+                      samplesAsCodaMCMC = TRUE, 
+                      summary = TRUE, 
+                      WAIC = TRUE
+                      )
+t_1 <- Sys.time()
+t_1 - t_0
+
+```
+
+```{r eval=TRUE, echo=FALSE, include=FALSE}
+
+# saveRDS(st_typeIV_BYM.model, file = "st_typeIV_BYM.model")
+st_typeIV_BYM.model <- readRDS("st_typeIV_BYM.model")
+
+```
+
+
+### Convergence diagnostics
+
+27. Plot the traceplots for the intercept and the four variances
+
+```{r eval=TRUE, echo=TRUE, fig.height = 12, fig.width=10}
+
+ggs_stBYM.model <- ggs(st_typeIV_BYM.model$samples)
+
+
+ggs_stBYM.model %>% filter(Parameter %in% c("overallRR", "sigma2.theta","sigma2.phi",
+                                            "sigma2.gamma", "sigma2.xi", "sigma2.zeta")) %>% 
+  ggs_traceplot() + theme_bw()
+
+```
+
+
+28. Calculate the Gelman and Rubin diagnostic and check the convergence of the random effects. 
+
+```{r eval=FALSE, echo=TRUE}
+
+GR.diag <- gelman.diag(st_typeIV_BYM.model$samples, multivariate = FALSE)
+
+all(GR.diag$psrf[startsWith(rownames(GR.diag$psrf), c("gamma")),"Point est."] < 1.1)
+all(GR.diag$psrf[startsWith(rownames(GR.diag$psrf), c("theta")),"Point est."] <1.1)
+all(GR.diag$psrf[startsWith(rownames(GR.diag$psrf), c("phi")),"Point est."] < 1.1)
+all(GR.diag$psrf[startsWith(rownames(GR.diag$psrf), c("xi")),"Point est."] <1.1)
+all(GR.diag$psrf[startsWith(rownames(GR.diag$psrf), c("zeta.centred")),"Point est."]<1.1)
+
+```
+
+## Model comparison
+
+At this point, we will load the spacetime interaction type I shown in a previous tutorial so we can compare all 4 types of interactions.
+
+```{r eval=TRUE, echo=FALSE, include=FALSE}
+
+st_typeI_BYM.model <- readRDS("st_typeI_BYM.model")
+
+```
+
+29. Spaghetti plots
+
+```{r, fig.height=9, fig.width=6}
+dat.stre <- data.frame(
+  year = rep(CC_HIV$year, times = 4),
+  ID = rep(CC_HIV$ID, times = 4), 
+  STRR = c(
+   exp(
+    st_typeI_BYM.model$summary$all.chains[startsWith(rownames(st_typeI_BYM.model$summary$all.chains), 
+          "zeta"),"Median"]), 
+    exp(
+    st_typeII_BYM.model$summary$all.chains[startsWith(rownames(st_typeII_BYM.model$summary$all.chains), 
+          "zeta"),"Median"]),
+    exp(
+    st_typeIII_BYM.model$summary$all.chains[startsWith(rownames(st_typeIII_BYM.model$summary$all.chains),
+          "zeta"),"Median"]),
+    exp(st_typeIV_BYM.model$summary$all.chains[startsWith(rownames(st_typeIV_BYM.model$summary$all.chains), 
+                                                    "zeta.centred"),"Median"])
+  ), 
+  model = c(rep("TypeI", times = 1859), rep("TypeII", times = 1859), rep("TypeIII", times = 1859),
+            rep("TypeIV", times = 1859))
+)
+
+# a. The spaghetti plot
+ggplot() + geom_line(data = dat.stre, aes(x = year, y = STRR, group = ID, col = ID)) +
+  scale_color_viridis_c() + theme_bw() + facet_grid(rows = vars(model))
+```
+
+30. Spatiotemporal maps
+
+```{r, fig.height=15, fig.width=20}
+
+dat.stre$year <- as.numeric(dat.stre$year)
+dat.plot <- left_join(RSA_shp, dat.stre, by = c("ID" = "ID"))
+
+spatimeplot <- function(j){
+  
+dat.plot %>% filter(model == j) %>% 
+  mutate(STRRq = cut(STRR, 
+                         breaks = c(0, 0.8, 1, 1.2, 1.5, 3), 
+                         label = c("0.8<", "(0.8, 1]", "(1, 1.2]", "(1.2, 1.5]", ">1.5"), 
+                         include.lowest = TRUE)
+             ) %>% 
+ggplot() + geom_sf(aes(fill = STRRq), col = NA) + facet_wrap(~year) +
+scale_fill_viridis_d(name = "") + theme_bw() + 
+theme(text = element_text(size = 30)) + ggtitle(j) -> p
+
+return(p)
+}
+
+spatimeplot("TypeI")
+spatimeplot("TypeII") 
+spatimeplot("TypeIII")
+spatimeplot("TypeIV") 
+
+```
+
+31. Table of hyperparameters
+
+
+```{r eval=TRUE, echo=TRUE}
+
+gethyper <- function(metric, model){
+  c(
+    model$summary$all.chains[paste0("sigma2.theta"),metric], 
+    model$summary$all.chains[paste0("sigma2.phi"),metric], 
+    model$summary$all.chains[paste0("sigma2.gamma"),metric], 
+    model$summary$all.chains[paste0("sigma2.xi"),metric],
+    model$summary$all.chains[paste0("sigma2.zeta"),metric]
+    )
+}
+
+tabhyper <- function(model){
+    dat.hyper <- 
+      round(
+      data.frame(
+        median = 
+          gethyper("Median", model),
+        LL = 
+          gethyper("95%CI_low", model),
+        UL = 
+          gethyper("95%CI_upp", model) 
+        ),
+      digits = 3)
+    
+    dat.hyper$CrI <-paste0(dat.hyper$median, " (", dat.hyper$LL, ", ", dat.hyper$UL, ")")
+    return(dat.hyper[,"CrI"])
+}
+
+
+dat.hyper <- 
+data.frame(
+"Type I" = tabhyper(st_typeI_BYM.model), 
+"Type II" = tabhyper(st_typeII_BYM.model),
+"Type III" = tabhyper(st_typeIII_BYM.model),
+"Type IV" = tabhyper(st_typeIV_BYM.model)
+)
+
+
+
+row.names(dat.hyper) <- 
+      c("sigma2.theta", "sigma2.phi", "sigma2.gamma", "sigma2.xi", "sigma2.zeta")
+
+knitr::kable(dat.hyper, caption = "Posterior median and 95% CrI of the variance hyperparameters.",
+             align=c(rep('r',times=4))) %>%  
+  kable_styling(bootstrap_options = "striped", full_width = F, position = "center")
+
+```
+
+32. WAIC
+```{r}
+
+dat.WAIC <- 
+data.frame(
+"Type I" = st_typeI_BYM.model$WAIC, 
+"Type II" = st_typeII_BYM.model$WAIC,
+"Type III" = st_typeIII_BYM.model$WAIC,
+"Type IV" = st_typeIV_BYM.model$WAIC
+)
+
+knitr::kable(dat.WAIC) %>%  kable_styling(bootstrap_options = "striped", full_width = F, position = "center")
+
+```
+
+
+## Conclusion
+
+This tutorial shows how to fit higher order interactions in `nimble`. Note that most results for the hyperparameters have not yet converged, thus the MCMC should be tuned accordingly if these parameters are of the main interest. The WAIC suggest that the best fitting model is the one with type II interaction. Nevertheless the difference between type II and type I and type III is negligible (wrt the WAIC). 
+
+## References
