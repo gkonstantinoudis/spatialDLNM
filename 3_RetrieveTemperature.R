@@ -104,11 +104,11 @@ library(patchwork)
 library(dplyr)
 library(readxl)
 
-setwd("E:/Postdoc Imperial/Projects/COVID19 Greece/TutorialExcess/")
+setwd("E:/Postdoc Imperial/Projects/Spatial DLNMs/data/")
 
 
 # read the files
-temperature <- nc_open("temperature2015_2020_Italy.nc")
+temperature <- nc_open("temperatureItaly.nc")
 extr.tmp <- ncvar_get(temperature, varid="t2m")
 
 # extract space and time
@@ -118,10 +118,10 @@ hour <- ncvar_get(temperature,"time")
 # hours since 1900-01-01
 hour_tr <- as.POSIXct(hour*3600, origin="1900-01-01 00:00")
 hour_tr <- format(as.POSIXct(hour_tr,format='%Y-%m-%d %H:%M:%S GMT'),format='%Y-%m-%d')
+length(hour_tr)
 
-
-dat <- data.frame(start = seq(from = 1, to = 52608, by = 24), 
-                  stop = seq(from = 24, to = 52608, by = 24))
+dat <- data.frame(start = seq(from = 1, to = length(hour_tr), by = 24), 
+                  stop = seq(from = 24, to = length(hour_tr), by = 24))
 
 un.hour <- unique(hour_tr)
 un.hour <- un.hour[order(un.hour)]
@@ -160,7 +160,7 @@ GetTemperature <-
     return(DailyMean(start = X[1], stop = X[2], date = X[3]))
     
 }
-) # approximately 1h
+) # approximately 2h
 
 
 
@@ -168,8 +168,8 @@ GetTemperature <- do.call(rbind, GetTemperature)
 GetTemperature %>% 
   mutate(ID = group_indices(., lon, lat)) -> GetTemperature
 
-# saveRDS(GetTemperature, file = "E:/Postdoc Imperial/Projects/COVID19 Greece/data/temperature/tmp_it_210420")
-# GetTemperature <- readRDS("E:/Postdoc Imperial/Projects/COVID19 Greece/data/temperature/tmp_it_210420")
+# saveRDS(GetTemperature, file = "tmp_it_211020")
+# GetTemperature <- readRDS("tmp_it_211020")
 
 
 
