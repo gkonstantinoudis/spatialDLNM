@@ -186,45 +186,13 @@ GetTemperature <- cbind(GetTemperature, DT_sf)
 
 
 # store it 
-# saveRDS(GetTemperature, file = "E:/Postdoc Imperial/Projects/COVID19 Greece/data/temperature/GetTemperature_IT_210420")
+# saveRDS(GetTemperature, file = "E:/Postdoc Imperial/Projects/COVID19 Greece/data/temperature/Gettmp_it_211020")
 # GetTemperature <- readRDS("E:/Postdoc Imperial/Projects/COVID19 Greece/data/temperature/GetTemperature_IT_210420")
 
 
 
-
-
-# We also need to get the weekly means
-GetTemperature$week <- week(GetTemperature$date)
-GetTemperature$year <- year(GetTemperature$date)
-
-
-# make sure its ISO weeks
-EUROSTAT_ISO <- read_excel("EUROSTAT_ISO.xls")
-
-EUROSTAT_ISO %>% 
-  mutate(EURO_TIME = as.Date(format(as.POSIXct(EUROSTAT_ISO$EURO_TIME,format='%Y-%m-%d UTC'),format='%Y-%m-%d'))) %>% 
-  filter(EURO_TIME < as.Date("2021-01-01")) %>% 
-  filter(EURO_TIME > as.Date("2014-12-31")) %>% 
-  mutate(YEAR = format(EURO_TIME, "%Y")) %>% 
-  dplyr::select(EURO_TIME, CD_EURO, YEAR, EURO_LABEL) -> 
-  EUROSTAT_ISO
-
-# merge the EUROSTAT_ISO with the temperature
-GetTemperature <- left_join(GetTemperature, EUROSTAT_ISO, by = c("date" = "EURO_TIME"))
-GetTemperature$ID.wy <- paste0(GetTemperature$ID, GetTemperature$EURO_LABEL)
-
-# take the mean per week
-GetTemperature %>% dplyr::group_by(ID.wy) %>% 
-  dplyr::mutate(weekly.mean = mean(temperature, na.rm = TRUE)) -> GetTemperature
-
-
-# remove the daily temperature
-GetTemperature_tmp <- GetTemperature[!duplicated(GetTemperature$ID.wy),]
-GetTemperature_tmp$temperature <- NULL
-names(table(GetTemperature_tmp$EURO_LABEL)) -> namtab
-
 # Now I need to overlay it on the shp and take the mean by municipality and week
-loopID <- unique(GetTemperature_tmp$EURO_LABEL)
+loopID <- unique(GetTemperature$date)
 list.loop <- list()
 list.plot <- list()
 
@@ -233,7 +201,7 @@ mun$IDSpace <- 1:nrow(mun)
 for(i in 1:length(loopID)){
   
   print(i)
-  tmp <- GetTemperature_tmp %>% filter(EURO_LABEL %in% loopID[i])
+  tmp <- GetTemperature %>% filter(date %in% loopID[i])
   tmp_sf <- st_as_sf(tmp, coords = c("X", "Y"), crs = st_crs(mun))
   tmp_sf$X <- tmp$X
   tmp_sf$Y <- tmp$Y
@@ -243,35 +211,22 @@ for(i in 1:length(loopID)){
   tmp_stjoin <- as.data.frame(tmp_stjoin)
   tmp_stjoin$geometry <- NULL
   
-  # the missings are basically the same week and year, so I will impute accordingly
-  tmp_stjoin$EURO_LABEL[is.na(tmp_stjoin$EURO_LABEL)] <- tmp_stjoin$EURO_LABEL[!is.na(tmp_stjoin$EURO_LABEL)][1]
-
   # and calculate mean temperature of points that fall in a particular municipality 
   tmp_stjoin %>% group_by(IDSpace) %>% 
-    mutate(mean.temp = mean(weekly.mean, na.rm = TRUE)) %>% 
+    mutate(mean.temp = mean(temperature, na.rm = TRUE)) %>% 
     filter(!duplicated(IDSpace)) -> tmp_stjoin
   
-  tmp_stjoin <- tmp_stjoin[,c("IDSpace", "EURO_LABEL", "mean.temp")]
+  tmp_stjoin <- tmp_stjoin[,c("IDSpace", "SIGLA", "date", "mean.temp")]
   tmp_stjoin$IDSpace <- as.character(tmp_stjoin$IDSpace)
-  mun$IDSpace <- as.character(mun$IDSpace)
-  
+
   list.loop[[i]] <- tmp_stjoin
 }
 
 
 loop.df <- do.call(rbind, list.loop)
-tab2link <- as.data.frame(mun[,c("SIGLA", "IDSpace")])
-tab2link$geometry <- NULL
-loop.df <- left_join(loop.df, tab2link, by = c("IDSpace" = "IDSpace"))
-colnames(loop.df)[1] <- "ID"
-
 
 # The temperature file clean
-saveRDS(loop.df, file = "TemperatureWeeklyItaly")
-
-
-
-
+saveRDS(loop.df, file = "TemperatureDailyItaly_11_20")
 
 
 
@@ -280,59 +235,17 @@ saveRDS(loop.df, file = "TemperatureWeeklyItaly")
 
 # Code for Figure 1
 
-GetTemperature[GetTemperature$date == "2015-01-01",] -> tmp_points
-
-tmp.rstr <- raster("temperature2015_2020_Italy.nc")
-plot(tmp.rstr[[1]])
-
-gplot_data <- function(x, maxpixels = 50000)  {
-  x <- raster::sampleRegular(x, maxpixels, asRaster = TRUE)
-  coords <- raster::xyFromCell(x, seq_len(raster::ncell(x)))
-  ## Extract values
-  dat <- utils::stack(as.data.frame(raster::getValues(x))) 
-  names(dat) <- c('value', 'variable')
-  
-  dat <- dplyr::as.tbl(data.frame(coords, dat))
-  
-  if (!is.null(levels(x))) {
-    dat <- dplyr::left_join(dat, levels(x)[[1]], 
-                            by = c("value" = "ID"))
-  }
-  dat
-}
-
-gplot_r <- gplot_data(tmp.rstr[[1]])
-gplot_r$value <- gplot_r$value -273.15 
-ggplot()  + theme_light() + 
-  geom_tile(data = dplyr::filter(gplot_r, !is.na(value)), aes(x = x, y = y, fill = value)) + 
-  ylab("") + xlab("") + 
-  scale_fill_viridis_c(name = "") +
-  ggtitle("ERA5 temperature at \n2015-01-01 00:00:00") -> p1
-
-
-
-ggplot()  + theme_light() + 
-  geom_point(data = tmp_points, aes(x = X, y = Y), size = 0.1, col = "grey44") + 
-  geom_sf(data = mun, fill = "NA", size = 1, col = "dodgerblue3") + 
-  ylab("") + xlab("") + 
-  ggtitle("NUTS3 regions and centroid of \nERA5 pixels")-> p2
-
-
-
-loop.df %>% filter(EURO_LABEL %in% "2015-W01") %>% 
+select.date <- "2019-08-05"
+loop.df %>% filter(date == select.date) %>% 
   left_join(mun, ., by = ("SIGLA" = "SIGLA")) -> tmp_mun
-
 
 ggplot()  + theme_light() + 
   geom_sf(data = tmp_mun, aes(fill = mean.temp), col = "grey44") + 
   ylab("") + xlab("") + 
   scale_fill_viridis_c(name = "") + 
-  ggtitle("Mean temperature during the \n1st week of 2015") -> p3
+  ggtitle(paste0("Mean daily temperature during in ", select.date)) -> p1
 
-png("Fig1.png", width = 30, height = 13, units = "cm", res = 300)
-p1|p2|p3
-dev.off()
-
+p1
 
 
 
