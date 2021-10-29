@@ -136,6 +136,45 @@ GetRH$lon <- GetRH$lat <- NULL
 #   scale_colour_viridis_c(alpha = 0.6)
   
 
+GetRH <- readRDS("GetRHIT_10_19")
+
+# Now we need the shp in Italy.
+mun <- read_sf("ProvCM01012020_g_WGS84.shp")
+
+
+# Now I need to overlay it on the shp and take the mean by municipality and week
+loopID <- unique(GetRH$date)
+list.loop <- list()
+list.plot <- list()
+
+
+for(i in 1:length(loopID)){
+  
+  print(i)
+  tmp <- GetRH %>% filter(date %in% loopID[i])
+  tmp_sf <- st_as_sf(tmp, coords = c("X", "Y"), crs = st_crs(mun))
+  tmp_sf$X <- tmp$X
+  tmp_sf$Y <- tmp$Y
+  
+  tmp_stjoin <- st_join(mun, tmp_sf)
+
+  tmp_stjoin <- as.data.frame(tmp_stjoin)
+  tmp_stjoin$geometry <- NULL
+  
+  # and calculate mean temperature of points that fall in a particular municipality 
+  tmp_stjoin %>% group_by(ID) %>% 
+    mutate(mean.temp = mean(relativehumidity, na.rm = TRUE)) %>% 
+    filter(!duplicated(ID)) -> tmp_stjoin
+  
+  tmp_stjoin <- tmp_stjoin[,c("ID", "SIGLA", "date", "mean.temp")]
+  tmp_stjoin$ID <- as.character(tmp_stjoin$ID)
+  
+  list.loop[[i]] <- tmp_stjoin
+}
+
+
+loop.df <- do.call(rbind, list.loop)
+
 
 ########################################################################################################
 ########################################################################################################
