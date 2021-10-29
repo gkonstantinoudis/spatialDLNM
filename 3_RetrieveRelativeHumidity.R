@@ -147,6 +147,7 @@ loopID <- unique(GetRH$date)
 list.loop <- list()
 list.plot <- list()
 
+mun$id_space <- 1:nrow(mun)
 
 for(i in 1:length(loopID)){
   
@@ -162,12 +163,12 @@ for(i in 1:length(loopID)){
   tmp_stjoin$geometry <- NULL
   
   # and calculate mean temperature of points that fall in a particular municipality 
-  tmp_stjoin %>% group_by(ID) %>% 
-    mutate(mean.temp = mean(relativehumidity, na.rm = TRUE)) %>% 
-    filter(!duplicated(ID)) -> tmp_stjoin
+  tmp_stjoin %>% group_by(id_space) %>% 
+    mutate(mean.rh = mean(relativehumidity, na.rm = TRUE)) %>% 
+    filter(!duplicated(id_space)) -> tmp_stjoin
   
-  tmp_stjoin <- tmp_stjoin[,c("ID", "SIGLA", "date", "mean.temp")]
-  tmp_stjoin$ID <- as.character(tmp_stjoin$ID)
+  tmp_stjoin <- tmp_stjoin[,c("id_space", "SIGLA", "date", "mean.rh")]
+  tmp_stjoin$id_space <- as.character(tmp_stjoin$id_space)
   
   list.loop[[i]] <- tmp_stjoin
 }
@@ -175,6 +176,7 @@ for(i in 1:length(loopID)){
 
 loop.df <- do.call(rbind, list.loop)
 
+# saveRDS(loop.df, file = "E:/Postdoc Imperial/Projects/Spatial DLNMs/data/RHIT_10_19")
 
 ########################################################################################################
 ########################################################################################################

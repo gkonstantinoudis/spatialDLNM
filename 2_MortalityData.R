@@ -42,6 +42,7 @@ deaths %>% select_at(
   ) -> deaths
 
 
+
 # Change to long format
 deaths <- gather(deaths, agesex, deaths, M_11:F_21, factor_key=TRUE)
 deaths %>% mutate(
@@ -148,7 +149,7 @@ pop11_20$expected <- pop11_20$prev*pop11_20$pop
 
 pop11_20 %>% group_by(year, Province) %>% 
   summarize(expected = sum(expected)) -> expected11_20
-
+table(expected11_20$Province)
 
 # aggregate deaths too
 
@@ -157,8 +158,21 @@ deaths %>% group_by(NOME_PROVINCIA, date) %>%
 
 age.deaths$year <- as.numeric(format(age.deaths$date, "%Y"))
 
+table(age.deaths$NOME_PROVINCIA)
+table(expected11_20$Province)
+
+# fix the names
+age.deaths$NOME_PROVINCIA[startsWith(age.deaths$NOME_PROVINCIA, "Forl")] = "Forli'-Cesena"
+age.deaths$NOME_PROVINCIA[startsWith(age.deaths$NOME_PROVINCIA, "Valle")] = "Aosta"
+age.deaths$NOME_PROVINCIA[startsWith(age.deaths$NOME_PROVINCIA, "Bolzano")] = "Bolzano"
+age.deaths$NOME_PROVINCIA[startsWith(age.deaths$NOME_PROVINCIA, "Massa")] = "Massa Carrara"
+age.deaths$NOME_PROVINCIA[startsWith(age.deaths$NOME_PROVINCIA, "Reggio")] = "Reggio di Calabria"
+
+
 # and bring them together
 age.deaths <- left_join(age.deaths, expected11_20, by = c("NOME_PROVINCIA" = "Province", "year" = "year"))
+summary(age.deaths)
+
 # assuming that the expected is constant per year.
 age.deaths %>% group_by(year, NOME_PROVINCIA) %>% tally() %>% 
   select(year, n) %>% 
