@@ -97,6 +97,7 @@ deaths$deaths <- as.numeric(deaths$deaths)
 deaths %>% filter(year != 2021) -> deaths
 # sum(deaths$deaths) # 6427268
 
+
 # calculate the prevalence by age, sex and year
 deaths %>% select(CL_ETA, sex, year, deaths) %>% 
   group_by(CL_ETA, sex, year) %>% 
@@ -105,6 +106,7 @@ deaths %>% select(CL_ETA, sex, year, deaths) %>%
 forexpected %>% filter(year != 2021) -> forexpected
 summary(forexpected)
 # sum(forexpected$deaths) # 6427268
+
 
 # expand.grid(
 #   sex = c("male", "female"), 
@@ -161,17 +163,22 @@ age.deaths$year <- as.numeric(format(age.deaths$date, "%Y"))
 table(age.deaths$NOME_PROVINCIA)
 table(expected11_20$Province)
 
+
+
+
 # fix the names
 age.deaths$NOME_PROVINCIA[startsWith(age.deaths$NOME_PROVINCIA, "Forl")] = "Forli'-Cesena"
 age.deaths$NOME_PROVINCIA[startsWith(age.deaths$NOME_PROVINCIA, "Valle")] = "Aosta"
 age.deaths$NOME_PROVINCIA[startsWith(age.deaths$NOME_PROVINCIA, "Bolzano")] = "Bolzano"
 age.deaths$NOME_PROVINCIA[startsWith(age.deaths$NOME_PROVINCIA, "Massa")] = "Massa Carrara"
-age.deaths$NOME_PROVINCIA[startsWith(age.deaths$NOME_PROVINCIA, "Reggio")] = "Reggio di Calabria"
+age.deaths$NOME_PROVINCIA[startsWith(age.deaths$NOME_PROVINCIA, "Reggio Ca")] = "Reggio di Calabria"
 
 
 # and bring them together
 age.deaths <- left_join(age.deaths, expected11_20, by = c("NOME_PROVINCIA" = "Province", "year" = "year"))
 summary(age.deaths)
+
+
 
 # assuming that the expected is constant per year.
 age.deaths %>% group_by(year, NOME_PROVINCIA) %>% tally() %>% 

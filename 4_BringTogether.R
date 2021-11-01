@@ -22,7 +22,6 @@ relativehumidity <- readRDS("RHIT_10_19")
 temperature <- readRDS("TemperatureDailyItaly_11_20")
 mun <- read_sf("ProvCM01012020_g_WGS84.shp")
 
-
 # I will clean this data to focus on the summer months. 
 holidays$hol <- 1
 deaths <- left_join(deaths, holidays, by = c("date" = "Data"))
@@ -42,6 +41,8 @@ deaths <- left_join(deaths, link_tab, by = c("NOME_PROVINCIA" = "DEN_UTS"))
 deaths <- left_join(deaths, relativehumidity[,c("SIGLA", "date", "mean.rh")], by = c("SIGLA" = "SIGLA", "date" = "date"))
 deaths <- left_join(deaths, temperature[,c("SIGLA", "date", "mean.temp")], by = c("SIGLA" = "SIGLA", "date" = "date"))
 
+
+
 # and calculate the lags
 deaths %>% mutate(year = year(date)) %>% 
   group_by(year, NOME_PROVINCIA) %>% 
@@ -55,10 +56,11 @@ deaths %>% mutate(year = year(date)) %>%
          relativehumidity_lag0_3 = (relativehumidity_lag1 + relativehumidity_lag2 + relativehumidity_lag3)/3) -> deaths
 
 
-
 saveRDS(deaths, file = "Findata")
 
 
 #############################################################
 #############################################################
 #############################################################
+
+
