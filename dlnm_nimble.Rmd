@@ -1,0 +1,140 @@
+---
+title: 'Spatial DLNM initial code'
+author: "Garyfallos Konstantinoudis & Tullia Padellini"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE, fig.align = "center",
+                      fig.width=7, fig.height=4)
+```
+
+* Load a bunch of libraries:
+```{r echo=TRUE, eval = TRUE, message=FALSE}
+library(dplyr)        # A package for data manipulation
+library(sf)           # Simple feature for R
+library(spdep)        # Functions and tests for evaluating spatial patterns 
+                      # and autocorrelation
+library(tidyr)
+
+library(nimble)       # A package for running nimble from R
+library(ggmcmc)       # A package for plotting and viewing of MCMC output
+library(coda)         # A package for summarizing and plotting of MCMC output 
+                      # and diagnostic tests
+
+library(ggplot2)      # A package that implements the grammar of graphics, which is a term used to
+                      # break up graphs into semantic components, such as geometries and layers.
+library(viridis)      # A package providing color palettes 
+library(patchwork)
+```
+
+
+
+## Data
+
+To be added
+
+
+## Basic nimble model 
+
+* k: temperature
+* s: municipality
+* r: region
+* t: time 
+* h: lag (?)
+
+
+
+
+```{r}
+
+dlnm_basic <- nimbleCode(
+{
+  for(s in 1:N_areas) ## municipalities
+    {
+    
+    for(k in 1:N_temp) ## temperatures
+      {
+      for(t in 3:N_time) ## time
+      {
+        
+        Y[k,s,t]  ~ dpois(mu[k,s,t])
+        log(mu[k,s,t]) <- log(E[k,s,t]) + beta_0 + 
+          
+          (u_0[k] * b.reg[idx_reg[s]] + w[s]) * X[k,s,t] +
+          (u_1[k] * b.reg[idx_reg[s]] + alpha1 * w[s]) * X[k,s,t-1] + 
+          (u_2[k] * b.reg[idx_reg[s]] + alpha2 * w[s]) * X[k,s,t-2] +
+        
+          v[s] + xi[t]
+        
+      } # end time loop
+    } # end temperature loop
+    
+    v[s] ~ dnorm(0, tau = tau.v)
+    
+    w[s] <- gamma_0 + phi[s]
+    
+    ## BYM 
+    phi[s] <- theta[s] + lambda[s]
+    theta[s] ~ dnorm(0, tau = tau.theta)
+
+  } # end municipalities
+  
+  
+  ## ICAR component 
+  lambda[1:N_areas] ~ dcar_normal(adj[1:L_areas], weights[1:L_areas], num[1:N_areas], tau.lambda, zero_mean = 1)
+
+  
+  
+  
+# RW2 prior on temporal random effects
+  xi[1:N_time] ~ dcar_normal(adj.time[1:L_time], weights.time[1:L_time], 
+                               num.time[1:N_time], tau.xi, c = 2, zero_mean = 1)
+
+  
+  
+# RW2 prior on temperature effects
+  u_0[1:N_temp] ~ dcar_normal(adj.temp[1:L_temp], weights.temp[1:L_temp], 
+                               num.temp[1:N_time], tau.temp0, c = 2, zero_mean = 1)
+
+  u_1[1:N_temp] ~ dcar_normal(adj.temp[1:L_temp], weights.temp[1:L_temp], 
+                               num.temp[1:N_temp], tau.temp1, c = 2, zero_mean = 1)
+
+  u_2[1:N_temp] ~ dcar_normal(adj.temp[1:L_temp], weights.temp[1:L_temp], 
+                               num.temp[1:N_temp], tau.temp2, c = 2, zero_mean = 1)
+
+  
+# priors
+
+  # temporal field
+  tau.xi ~ dgamma(0.5,0.005)          
+
+  # spatial field
+  tau.v ~ dgamma(1,0.001)         
+
+  tau.theta ~ dgamma(1,0.001)         
+  tau.lambda ~ dgamma(0.5,0.005)         
+
+
+  # temperatures
+  tau.temp0 ~ dgamma(0.5,0.005)          
+  tau.temp1 ~ dgamma(0.5,0.005)          
+  tau.temp2 ~ dgamma(0.5,0.005)          
+
+  
+  # spatial field scaling 
+  alpha1 ~ dnorm(0, 1)
+  alpha2 ~ dnorm(0, 1)
+
+})
+
+
+```
+
+
+
